@@ -1,0 +1,1147 @@
+/*
+ * To change this license header, choose License Headers in Project Properties.
+ * To change this template file, choose Tools | Templates
+ * and open the template in the editor.
+ */
+
+#include "m1.h"
+#include "m1_additional.h"
+#include "m2_M.h"
+#include <string>
+#include <X11/Xlib.h>
+#include <chrono>
+#include "graphics.h"
+#include "graphics.cpp"
+#include <unordered_map>
+#include <vector>
+#include <boost/algorithm/string.hpp>
+#include <algorithm>
+
+using namespace std;
+using namespace boost;
+
+extern void act_on_new_button_func(void (*drawscreen_ptr) (void));
+extern void act_on_button_press(float x, float y, t_event_buttonPressed event);
+extern void act_on_mouse_move(float x, float y);
+extern void act_on_key_press(char c, int keysym);
+extern void drawscreen(void);
+extern void delay(long milliseconds);
+extern double cos_lat_avg_POI();
+bool isOSMDoneLoading = false;
+bool showArrow = false;
+
+bool hit_search;
+string typed_text = "";
+
+std::vector<unsigned> drawPoifromname(string poiname);
+t_bound_box initial_coords;
+
+unordered_map <string, vector<unsigned>> POItype_by_POI_id;
+
+Surface demo=  load_png_from_file("libstreetmap/resources/arrow_left.png");
+Surface bank=  load_png_from_file("libstreetmap/resources/small_image.png");
+Surface hospital= load_png_from_file("libstreetmap/resources/arrow_inout.png");
+
+
+//string streetsBin = "/cad2/ece297s/public/maps/saint-helena.streets.bin";
+//string osmBin = "/cad2/ece297s/public/maps/saint-helena.osm.bin";
+std::vector<std::vector<LatLon>> OSMBuildings;
+std::vector<unsigned>POIIDS;
+
+double greatestLattitude, smallestLattitude;
+double greatestLongitude, smallestLongitude;
+
+
+
+vector <unsigned> intersections;
+bool show_highlighted_intersections = false;
+bool show_highlighted_POI = false;
+#define ZOOM_LEVEL 0.0001
+
+//Calculate the window size based on latitude and longitude values
+LatLon getAvgLatLon() {
+    LatLon current;
+    double latSum = 0;
+    double lonSum = 0;
+    double lat, lon;
+    
+    //Initialize the first position point to greatest lat and Lon values
+    greatestLattitude = smallestLattitude = getIntersectionPosition(0).lat();
+    greatestLongitude = smallestLongitude = getIntersectionPosition(0).lon();
+
+    //Loop through all the interested points and make comparison between the current points and greatest Lat&Lon values
+    for (unsigned i = 0; i < getNumberOfIntersections(); i++) {
+        current = getIntersectionPosition(i);
+        latSum += current.lat();
+        lonSum += current.lon();
+        if (current.lat() > greatestLattitude) greatestLattitude = current.lat();
+        if (current.lon() > greatestLongitude) greatestLongitude = current.lon();
+        if (current.lat() < smallestLattitude) smallestLattitude = current.lat();
+        if (current.lon() < smallestLongitude) smallestLongitude = current.lon();
+    }
+    
+    //Take the average of all the interest points of the map display 
+    lat = latSum / getNumberOfIntersections();
+    lon = -lonSum / getNumberOfIntersections();
+    LatLon avgLatLon(lat, lon);
+    
+    //Decide for the actual size of the map display
+    LatLon positionRightTop(greatestLattitude, greatestLongitude);
+    LatLon positionLeftBottom(smallestLattitude, smallestLongitude);
+    
+    //Set the initial coordinates of the map
+    initial_coords = t_bound_box(getAbsoluteXYPos(positionLeftBottom).x,
+            getAbsoluteXYPos(positionLeftBottom).y,
+            getAbsoluteXYPos(positionRightTop).x,
+            getAbsoluteXYPos(positionRightTop).y);
+    return avgLatLon;
+
+}
+
+void draw_map() {
+
+    /**************** initialize display **********************/
+
+    // Set-up coordinates. The coordinates passed in define what coordinate
+    // limits you want to use; this coordinate system is mapped to fill 
+    // the screen.
+    getAvgLatLon();
+    init_graphics("Maps Graphics", WHITE);
+
+    set_visible_world(initial_coords);
+    set_drawing_buffer(OFF_SCREEN);
+    POItype_by_POI_id_preload(POItype_by_POI_id);
+
+    update_message("");
+
+    create_button("Window", "0 Clicks", act_on_new_button_func); // name is UTF-8 
+    create_button("0 Clicks", "POI", act_on_POI);
+    // Enable mouse movement (not just button presses) and key board input.
+    // The appropriate callbacks will be called by event_loop.
+
+    set_mouse_move_input(true);
+    drawscreen();
+    //  set_coordinate_system(GL_SCREEN);
+    event_loop(act_on_button_press, act_on_mouse_move, act_on_key_press, drawscreen);
+    // event_loop(act_on_mousebutton, NULL, act_on_keypress, drawscreen);            
+    close_graphics();
+    std::cout << "Graphics closed down.\n";
+}
+
+//Draws the features included in the map
+void drawscreen(void) {
+    set_drawing_buffer(OFF_SCREEN);
+    set_coordinate_system(GL_WORLD);
+    set_draw_mode(DRAW_NORMAL);
+    clearscreen();
+    drawWaterBodies();
+    drawIslands();
+    drawGreenery();
+    drawBuildingsAndUnknown(); // Draws buildings and unknown features
+    showArrow = false;
+    drawSearchBox();
+    //drawOSMBuildings();
+    //drawHospitals();
+    //  drawPointofInterest();
+    
+//    drawMinorStreetSegments();
+//    drawRegularStreetSegments();
+//    drawMajorStreetSegments();
+//    drawFreeWayStreetSegments();
+    // drawStreetSegments();
+    //  drawMinorNames();
+    //  drawRegularNames();
+//    drawMajorNames();
+//    drawFreeWayNames();
+//    drawPOIbyType("bank");
+    draw_highlighted_POI();
+    if (get_visible_world().area() < 1.8e-7) {
+        showArrow = true;
+        drawMinorStreetSegments();
+        drawRegularStreetSegments();
+        drawMajorStreetSegments();
+        drawFreeWayStreetSegments();
+        drawMinorNames();
+        drawPOIbyType("bank");
+        drawSearchBox();
+    } else if (get_visible_world().area() < 5.2e-7) {
+        showArrow = true;
+        drawRegularStreetSegments();
+        drawMajorStreetSegments();
+        drawFreeWayStreetSegments();
+        setfontsize(7);
+        drawRegularNames(); 
+        setfontsize(8);
+        drawMajorNames();
+        drawPOIbyType("hospital");
+        drawSearchBox();
+    } else if (get_visible_world().area() < 1.4e-6) {
+        drawRegularStreetSegments();
+        drawMajorStreetSegments(); 
+        drawFreeWayStreetSegments();
+        setfontsize(8);
+        drawMajorNames();
+        drawPOIbyType("hospital");
+        drawSearchBox();
+    } else if (get_visible_world().area() < 4.1e-6) {
+        drawRegularStreetSegments();
+        drawMajorStreetSegments();
+        drawFreeWayStreetSegments();
+        setfontsize(8);
+        drawMajorNames();
+        drawSearchBox();
+    } else if (get_visible_world().area() < 1.1e-5) {
+        drawMajorStreetSegments(); 
+        drawFreeWayStreetSegments();
+        //drawMajorNames();
+        drawFreeWayNames();
+        drawSearchBox();
+    } else if (get_visible_world().area() < 3.2e-5) {
+         drawMajorStreetSegments();
+         drawFreeWayStreetSegments(); 
+         drawFreeWayNames();
+         drawSearchBox();
+    }
+    draw_highlighted_intersections();
+
+    // drawStreetNames();
+    copy_off_screen_buffer_to_screen();
+
+    set_coordinate_system(GL_SCREEN);
+}
+
+
+void act_on_button_press(float x, float y, t_event_buttonPressed event) {
+    intersections.clear();
+    show_highlighted_intersections = false;
+    t_point world;
+    world.x = x;
+    world.y = y;
+    t_point screen = visibleWorldToVisibleScreen(world);
+    if (screen.x > get_visible_screen().right() - 40 - TEXTBOX_LENGTH && screen.x < get_visible_screen().right() - 40 && screen.y > 20 && screen.y < 20 + TEXTBOX_WIDTH) {
+        hit_search = true;
+        set_keypress_input(true);
+    //    cout << "hit!" << endl; //get rid of this later
+        set_drawing_buffer(ON_SCREEN);
+        drawSearchBox();
+    } else {
+        hit_search = false;
+        set_keypress_input(false);
+        typed_text = "";
+        set_drawing_buffer(ON_SCREEN);
+        drawSearchBox();
+        t_point clicked;
+        clicked.x = x;
+        clicked.y = y;
+        unsigned closest_intersection = find_closest_intersection(getLatLon (clicked));
+        float length = getAbsoluteXYLength((getAbsoluteXYPos(getIntersectionPosition(closest_intersection))), clicked);
+        if (length < 3e-06){
+           // cout << length << endl;
+            intersections.push_back(closest_intersection);
+            search_found();
+        }
+    }
+}
+
+void search_found() {
+    show_highlighted_intersections = true;
+    t_point center;
+    center.x = 0;
+    center.y = 0;
+    t_point furthest;
+    for (unsigned x = 0; x < intersections.size(); x++) {
+        center += getAbsoluteXYPos(getIntersectionPosition(intersections[x]));
+    }
+
+    center.x = center.x / intersections.size();
+    center.y = center.y / intersections.size();
+
+    if (intersections.size() == 1) {
+
+        set_visible_world(center.x - ZOOM_LEVEL, center.y - ZOOM_LEVEL, center.x + ZOOM_LEVEL, center.y + ZOOM_LEVEL, false);
+    } else {
+        furthest = center;
+        for (unsigned x = 0; x < intersections.size(); x++) {
+            if (getAbsoluteXYLength(center, furthest) < getAbsoluteXYLength(center, getAbsoluteXYPos(getIntersectionPosition(intersections[x])))) {
+                furthest = getAbsoluteXYPos(getIntersectionPosition(intersections[x]));
+            }
+        }
+        //void set_visible_world(float left, float bottom, float right, float top) 
+     //   cout << furthest.x << " " << furthest.y << " " << intersections.size() << endl;
+        furthest.x = abs(center.x - furthest.x);
+        furthest.y = abs(center.y - furthest.y);
+        if (furthest.x > ZOOM_LEVEL || furthest.y > ZOOM_LEVEL)
+            set_visible_world(center.x - furthest.x - ZOOM_LEVEL / 10, center.y - furthest.y - ZOOM_LEVEL / 10, center.x + furthest.x + ZOOM_LEVEL / 10, center.y + furthest.y + ZOOM_LEVEL / 10, false);
+        else
+            set_visible_world(center.x - ZOOM_LEVEL, center.y - ZOOM_LEVEL, center.x + ZOOM_LEVEL, center.y + ZOOM_LEVEL, false);
+    }
+    drawscreen();
+
+}
+
+void search_intersection() {
+    intersections.clear();
+    settextrotation(0);
+    auto ampersand = typed_text.find("&");
+    if (ampersand == string::npos) {
+     //   cout << "Invalid format" << endl;
+        update_message("Invalid format, please include & between street names, ex. Eglinton Avenue East & Yonge Street");
+    } else {
+        string street1 = typed_text.substr(0, ampersand);
+        string street2 = typed_text.substr(ampersand + 2);
+        trim(street1);
+        trim(street2);
+     //   cout << street1 << " " << street2;
+        intersections = find_intersection_ids_from_street_names(street1, street2);
+        if (intersections.size() == 0) {
+         //   cout << "didn't find" << endl;
+            update_message("Intersection does not exist.");
+        } else {
+      //      cout << "found" << endl;
+            
+            search_found();
+
+        }
+    }
+}
+
+void act_on_key_press(char c, int keysym) {
+    if (keysym == XK_Return) {
+        set_keypress_input(false);
+        search_intersection();
+        typed_text = "";
+        hit_search = false;
+    } else if (keysym == XK_BackSpace && typed_text.length() > 0) {
+        typed_text = typed_text.substr(0, typed_text.length() - 1);
+    } else {
+        if ((c >= 32 && c <= 126)) {
+          //  cout << char(c) << endl;
+            typed_text = typed_text + char(c);
+        }
+    }
+    set_drawing_buffer(ON_SCREEN);
+    drawSearchBox();
+}
+
+void draw_highlighted_intersections() {
+    if (show_highlighted_intersections) {
+        string bottom_text = "";
+        setcolor(RED);
+        setlinewidth(3);
+        for (unsigned x = 0; x < intersections.size(); x++) {
+           // cout << getAbsoluteXYPos(getIntersectionPosition(intersections[x])).x << " " << getAbsoluteXYPos(getIntersectionPosition(intersections[x])).y << endl;
+            drawarc(getAbsoluteXYPos(getIntersectionPosition(intersections[x])).x, getAbsoluteXYPos(getIntersectionPosition(intersections[x])).y, 0.000004, 0, 360);
+            //getIntersectionName(IntersectionIndex intersectionIdx);
+            bottom_text = bottom_text + "   " + "Intersection Name: " + getIntersectionName(intersections[x]) + "   "
+                    + "Lat: " + to_string(getIntersectionPosition(intersections[x]).lat()) + "   " + "Lon: " + to_string(getIntersectionPosition(intersections[x]).lon());
+            update_message(bottom_text);
+        }
+    } else {
+        update_message("");
+    }
+}
+
+
+// Converts a given LatLon into a xy position to draw on the screen 
+t_point getAbsoluteXYPos(LatLon position) {
+    //    (x, y) = (lon Â· cos(latavg), lat) 
+    //     d = R Â·sqrt( (y2 â y1)^2 + (x2 â x1)^2)
+    t_point convXY;
+    float latAvg = DEG_TO_RAD * (greatestLattitude + smallestLattitude) / 2;
+    convXY.x = (DEG_TO_RAD * position.lon() * cos(latAvg)); //cos_lat_avg_POI());
+    convXY.y = DEG_TO_RAD * position.lat();
+    return convXY;
+}
+
+LatLon getLatLon (t_point XYPos){
+    float latAvg = DEG_TO_RAD * (greatestLattitude + smallestLattitude) / 2;
+    LatLon pos(XYPos.y/DEG_TO_RAD, XYPos.x/(DEG_TO_RAD * cos (latAvg)));
+    return pos;
+    
+}
+
+t_point visibleWorldToVisibleScreen(t_point visible_world) {
+    float y_screen_over_world = get_visible_screen().get_height() / get_visible_world().get_height();
+    float x_screen_over_world = get_visible_screen().get_width() / get_visible_world().get_width();
+
+    //find offset
+    float top_world_to_screen = get_visible_world(). top() * y_screen_over_world;
+    float left_world_to_screen = get_visible_world(). left() * x_screen_over_world;
+
+    float y_offset = get_visible_screen().top() - top_world_to_screen;
+    float x_offset = get_visible_screen().left() - left_world_to_screen;
+    //t_point offset = get_visible_screen().top_right() - get_visible_world().top_right();
+    t_point on_screen;
+    on_screen.x = visible_world.x * x_screen_over_world + x_offset;
+    on_screen.y = visible_world.y * y_screen_over_world + y_offset;
+    return on_screen;
+
+}
+
+double getAbsoluteXYLength(t_point p1, t_point p2) {
+    return sqrt((p1.x - p2.x)*(p1.x - p2.x) + (p1.y - p2.y)*(p1.y - p2.y));
+}
+
+void drawSearchBox() {
+    drawTextBox(get_visible_screen().right() - 40 - TEXTBOX_LENGTH, 20);
+    set_coordinate_system(GL_SCREEN);
+    setfontsize(10);
+    settextrotation(0);
+    if (!hit_search) {
+        setcolor(LIGHTGREY);
+        string search_text = "Search (ex. Eglinton Avenue East & Yonge Street)";
+        drawtext(get_visible_screen().right() - 40 - TEXTBOX_LENGTH + 10, 20 + 10, search_text, FLT_MAX, FLT_MAX, false);
+    } else {
+        setcolor(BLACK);
+        drawtext(get_visible_screen().right() - 40 - TEXTBOX_LENGTH + 10, 20 + 10, typed_text, FLT_MAX, FLT_MAX, false);
+    }
+    set_coordinate_system(GL_WORLD);
+}
+
+void drawTextBox(float x_topleft, float y_topleft) {
+    set_coordinate_system(GL_SCREEN);
+    setcolor(WHITE);
+    fillrect(x_topleft, y_topleft, x_topleft + TEXTBOX_LENGTH, y_topleft + TEXTBOX_WIDTH);
+    setcolor(DARKGREY);
+    setlinewidth(3);
+    drawrect(x_topleft, y_topleft, x_topleft + TEXTBOX_LENGTH, y_topleft + TEXTBOX_WIDTH);
+    set_coordinate_system(GL_WORLD);
+}
+
+void drawMinorStreetSegments() {
+    int width = 2 * sqrt(1 / (get_visible_world().get_width()*100)) - 4;
+    if (width > 1) {
+        setcolor(LIGHTGREY);
+        setlinewidth(width);
+        vector<unsigned int> minor = find_street_segment_street_by_type("minor");
+        for (unsigned int x = 0; x < minor.size(); x++) {
+            drawingStreetSegments(minor[x]);
+        }
+    }
+}
+
+// smaller than major street segments, but same color, only draw if width>1
+
+void drawRegularStreetSegments() {
+    int width = 2 * sqrt(1 / (get_visible_world().get_width()*100)) - 1;
+    if (width > 1) {
+        setcolor(DARKGREY);
+        setlinewidth(width);
+        vector<unsigned int> regular = find_street_segment_street_by_type("regular");
+        for (unsigned int x = 0; x < regular.size(); x++) {
+            drawingStreetSegments(regular[x]);
+        }
+        setcolor(YELLOW);
+        vector<unsigned int> link = find_street_segment_street_by_type("link");
+        for (unsigned int x = 0; x < link.size(); x++) {
+            drawingStreetSegments(link[x]);
+        }
+    }
+}
+
+//only draw if width >2  but smaller & different color from freeways
+
+void drawMajorStreetSegments() {
+    int width = 2 * sqrt(1 / (get_visible_world().get_width()*100)) + 1;
+    if (width > 2) {
+        setcolor(DARKGREY);
+        setlinewidth(width);
+        vector<unsigned int> major = find_street_segment_street_by_type("major");
+        for (unsigned int x = 0; x < major.size(); x++) {
+            drawingStreetSegments(major[x]);
+        }
+    }
+}
+
+//shows up always
+
+void drawFreeWayStreetSegments() {
+    int width = 2 * sqrt(1 / (get_visible_world().get_width()*100)) + 2;
+    setcolor(ORANGE);
+    setlinewidth(width);
+    vector<unsigned int> freeways = find_street_segment_street_by_type("freeway");
+    for (unsigned int x = 0; x < freeways.size(); x++) {
+        drawingStreetSegments(freeways[x]);
+    }
+}
+//Declarition (Will be moved)
+double setRotation(t_point &from, t_point &to);
+void draw_arrow(t_point &from, t_point &to);
+
+void drawingStreetSegments(unsigned int x) {
+    StreetSegmentInfo currStreetSegment = getStreetSegmentInfo(x);
+    t_point from = getAbsoluteXYPos(getIntersectionPosition(currStreetSegment.from));		
+    t_point to = getAbsoluteXYPos(getIntersectionPosition(currStreetSegment.to));
+    if (currStreetSegment.curvePointCount == 0) {
+        drawline(from, to);
+        if (currStreetSegment.oneWay && showArrow) {
+            draw_arrow(from, to);
+        }
+    } else {
+        drawline(getAbsoluteXYPos(getIntersectionPosition(currStreetSegment.from)), getAbsoluteXYPos(getStreetSegmentCurvePoint(x, 0)));
+        for (unsigned y = 0; y < currStreetSegment.curvePointCount - 1; y++) {
+            drawline(getAbsoluteXYPos(getStreetSegmentCurvePoint(x, y)), getAbsoluteXYPos(getStreetSegmentCurvePoint(x, y + 1)));
+        }
+        drawline(getAbsoluteXYPos(getIntersectionPosition(currStreetSegment.to)), getAbsoluteXYPos(getStreetSegmentCurvePoint(x, currStreetSegment.curvePointCount - 1)));
+    }
+}
+
+void draw_arrow(t_point &from, t_point &to) {
+    t_color temp_color = getcolor();
+    t_bound_box arrow((from.x) - 0.03, (from.y) - 0.03, (from.x) + 0.03, (from.y) + 0.03);		
+    setcolor(LIMEGREEN);			
+    settextrotation(setRotation(from, to));
+    drawtext_in(arrow, "->");
+    setcolor(temp_color);
+}
+
+double setRotation(t_point &from, t_point &to) {		
+    if (from.x == to.x) return 0;
+    double angle = atan((to.y - from.y) / (to.x - from.x)) * 180 / PI;		
+    //if (angle < 0.0) angle += 360;
+    return angle;
+}
+//implement later that only shows up if width >1
+
+vector <t_point> clean_names;
+
+void drawMinorNames() {
+    int width = 2 * sqrt(1 / (get_visible_world().get_width()*100)) + 1;
+    if (width > 6) {
+        setcolor(BLACK);
+
+        //setfontsize(width);
+        vector<unsigned int> minor = find_street_segment_street_by_type("minor");
+        for (unsigned int x = 0; x < minor.size(); x = x + 5) {
+            StreetSegmentInfo currStreetSegment = getStreetSegmentInfo(minor[x]);
+            if (getStreetName(currStreetSegment.streetID) != "<unknown>") {
+                //drawingStreetNames(currStreetSegment, get_visible_world().get_width(), "minor");
+                t_point from = getAbsoluteXYPos(getIntersectionPosition(currStreetSegment.from));
+                t_point to = getAbsoluteXYPos(getIntersectionPosition(currStreetSegment.to));
+                t_point middle;
+                middle.x = (from.x + to.x) / 2;
+                middle.y = (from.y + to.y) / 2;
+                setfontsize(7);
+                if (to.x - from.x < 0) {
+                    settextrotation(asin((-to.y + from.y) / getAbsoluteXYLength(to, from))*180.0 / PI);
+                } else {
+                    settextrotation(asin((to.y - from.y) / getAbsoluteXYLength(to, from))*180.0 / PI);
+                }
+                drawtext(middle, getStreetName(currStreetSegment.streetID), 0.001, 0.001);
+            }
+        }
+        clean_names.clear();
+    }
+}
+
+void drawRegularNames() {
+    int width = 2 * sqrt(1 / (get_visible_world().get_width()*100)) + 2;
+    if (width > 6) {
+        setcolor(BLACK);
+
+        //setfontsize(7);
+        vector<unsigned int> regular = find_street_segment_street_by_type("regular");
+        for (unsigned int x = 0; x < regular.size(); x = x + 3) {
+            StreetSegmentInfo currStreetSegment = getStreetSegmentInfo(regular[x]);
+            if (getStreetName(currStreetSegment.streetID) != "<unknown>") {
+
+                drawingStreetNames(currStreetSegment, get_visible_world().get_width(), "regular");
+            }
+        }
+        clean_names.clear();
+    }
+}
+
+void drawMajorNames() {
+    int width = 2 * sqrt(1 / (get_visible_world().get_width()*100)) + 3;
+    if (width > 6) {
+        setcolor(BLACK);
+
+        //setfontsize(width);
+        vector<unsigned int> major = find_street_segment_street_by_type("major");
+        for (unsigned int x = 0; x < major.size(); x++) {
+            StreetSegmentInfo currStreetSegment = getStreetSegmentInfo(major[x]);
+            if (getStreetName(currStreetSegment.streetID) != "<unknown>") {
+
+                drawingStreetNames(currStreetSegment, get_visible_world().get_width(), "major");
+            }
+        }
+        clean_names.clear();
+    }
+}
+
+void drawFreeWayNames() {
+
+    int width = 2 * sqrt(1 / (get_visible_world().get_width()*100)) + 2;
+    setcolor(BLACK);
+    if (get_visible_world().get_width() > 0.002)
+        setfontsize(width + 3);
+    else if (get_visible_world().get_width() > 0.001)
+        setfontsize(width + 2);
+    else
+        setfontsize(width);
+    vector<unsigned int> freeways = find_street_segment_street_by_type("freeway");
+    for (unsigned int x = 0; x < freeways.size(); x++) {
+        StreetSegmentInfo currStreetSegment = getStreetSegmentInfo(freeways[x]);
+        if (getStreetName(currStreetSegment.streetID) != "<unknown>") {
+
+            drawingStreetNames(currStreetSegment, get_visible_world().get_width(), "freeway");
+        }
+    }
+    clean_names.clear();
+}
+
+void drawingStreetNames(StreetSegmentInfo currStreetSegment, double width, string type) {
+    // if (currStreetSegment.curvePointCount == 0) {
+    t_point from = getAbsoluteXYPos(getIntersectionPosition(currStreetSegment.from));
+    t_point to = getAbsoluteXYPos(getIntersectionPosition(currStreetSegment.to));
+    //      cout << getAbsoluteXYLength(to, from) << " " << width << endl;
+    if (checkCleanNames((to.x + from.x) / 2, (to.y + from.y) / 2, width, type)) {
+        if (to.x - from.x < 0) {
+            settextrotation(asin((-to.y + from.y) / getAbsoluteXYLength(to, from))*180.0 / PI);
+        } else {
+            settextrotation(asin((to.y - from.y) / getAbsoluteXYLength(to, from))*180.0 / PI);
+        }
+        drawtext((to.x + from.x) / 2, (to.y + from.y) / 2, getStreetName(currStreetSegment.streetID), FLT_MAX, FLT_MAX);
+    }
+    //}
+}
+//unordered_map<string, vector <t_point>> clean_names;
+
+bool checkCleanNames(double x, double y, double width, string type) {
+    double use_width;
+    if (type == "freeway") {
+        use_width = width / 8;
+    } else if (type == "major") {
+        use_width = width / 12;
+    } else if (type == "minor") {
+        use_width = width / 14;
+    } else {
+        use_width = width / 13;
+    }
+    for (unsigned i = 0; i < clean_names.size(); i++) {
+        t_point temp;
+        temp.x = x;
+        temp.y = y;
+
+        if (getAbsoluteXYLength(clean_names[i], temp) < use_width) {
+            return false;
+        }
+    }
+    t_point temp;
+    temp.x = x;
+    temp.y = y;
+    clean_names.push_back(temp);
+    return true;
+}
+
+// to be replaced
+
+void drawStreetNames() {
+    int width = (-13 - 3 * log10(get_visible_world().area()));
+    if (width > 0) {
+        for (unsigned x = 0; x < getNumberOfStreetSegments(); x++) {
+            StreetSegmentInfo currStreet = getStreetSegmentInfo(x);
+            if (currStreet.curvePointCount == 0) {
+                t_point from = getAbsoluteXYPos(getIntersectionPosition(currStreet.from));
+                t_point to = getAbsoluteXYPos(getIntersectionPosition(currStreet.to));
+
+                if (getStreetName(currStreet.streetID) != "<unknown>" && getAbsoluteXYLength(to, from) > 0.000015) {
+                    //rotation is sin-1, opposite over hypotenuse, meaning the difference in y over the length
+                    setcolor(BLACK);
+                    setfontsize(width);
+                    //   settextrotation(asin((to.y-from.y)/getAbsoluteXYLength(to,from))*180.0/PI);
+                    if (to.x - from.x < 0) {
+                        settextrotation(asin((-to.y + from.y) / getAbsoluteXYLength(to, from))*180.0 / PI);
+                    } else {
+                        settextrotation(asin((to.y - from.y) / getAbsoluteXYLength(to, from))*180.0 / PI);
+                    }
+
+                    drawtext((to.x + from.x) / 2, (to.y + from.y) / 2, getStreetName(currStreet.streetID), FLT_MAX, FLT_MAX);
+                }
+            }
+
+        }
+    }
+}
+
+//Iterates through all the features and draws green spaces
+void drawGreenery() {
+    unsigned featureCount = getNumberOfFeatures();
+    for (unsigned i = 0; i < featureCount; i++) {
+        // Check for park(1), greenspace(8), golfcourse(9)
+        if (getFeatureType(i) == 1 || getFeatureType(i) == 8 || getFeatureType(i) == 9) {
+            setcolor(LIMEGREEN);
+            drawPolygon(getFeaturePointCount(i), i);
+        }
+    }
+}
+
+//Iterates through all the features and draws water bodies
+void drawWaterBodies() {
+    unsigned featureCount = getNumberOfFeatures();
+    for (unsigned i = 0; i < featureCount; i++) {
+        if (getFeatureType(i) == 2 || getFeatureType(i) == 3 || getFeatureType(i) == 4 || getFeatureType(i) == 10) {
+            setcolor(BLUE);
+            drawPolygon(getFeaturePointCount(i), i);
+        }
+    }
+}
+
+//Iterates through all the features and draws islands
+void drawIslands() {
+    unsigned featureCount = getNumberOfFeatures();
+    for (unsigned i = 0; i < featureCount; i++) {
+        // check for island(5)
+        if (getFeatureType(i) == 5 || getFeatureType(i) == 6) {
+            setcolor(DARKGREEN);
+            drawPolygon(getFeaturePointCount(i), i);
+        }
+
+    }
+}
+//draws  building or  unknown.
+void drawBuildingsAndUnknown() {
+    unsigned featureCount = getNumberOfFeatures();
+
+    for (unsigned i = 0; i < featureCount; i++) {
+        if (getFeatureType(i) == 7) {
+            setcolor(LIGHTGREY);
+            drawPolygon(getFeaturePointCount(i), i);
+        }// Unknown 
+        else if (getFeatureType(i) == 0) {
+            setcolor(BISQUE);
+            drawPolygon(getFeaturePointCount(i), i);
+        }
+
+    }
+}
+
+
+ // Does the same as the below function 
+// first gets the coordinates from features points and its ids
+void drawPolygon(unsigned featurePoints, unsigned featureId) {
+    unsigned i = 0;
+    LatLon start = getFeaturePoint(featureId, i);
+    LatLon end = getFeaturePoint(featureId, featurePoints - 1);
+    std::vector<t_point> featurePointsXY;
+
+    bool polygon = false;
+    featurePointsXY.push_back(getAbsoluteXYPos(start));
+    if ((start.lat() == end.lat()) && (start.lon() == end.lon())) {
+        polygon = true;
+    }
+
+    for (i = 1; i < featurePoints; i++) {
+        LatLon coordinates = getFeaturePoint(featureId, i);
+        // featurePointsXY[i] = getAbsoluteXYPos(coordinates);
+        featurePointsXY.push_back(getAbsoluteXYPos(coordinates));
+        if (polygon == false) {
+            setlinewidth(6);
+            drawline(featurePointsXY[i - 1], featurePointsXY[i]);
+        }
+    }
+    if (polygon == true) {
+        fillpoly(&featurePointsXY[0], featurePoints);
+    }
+    featurePointsXY.clear();
+}
+
+// Second gets the coordinates from LatLon points
+void drawPolygon(std::vector<LatLon> points) {
+    bool polygon = false;
+    std::vector<t_point> featurePointsXY;
+    //Checks here if it is a polygon or a line
+    if ((points[0].lat() == points[points.size() - 1].lat()) && (points[0].lon() == points[points.size() - 1].lon())) {
+        polygon = true;
+    }
+    unsigned i = 0;
+    // change  Points_XY to Absolute_PosPointsXY [points.size()];
+    featurePointsXY.push_back(getAbsoluteXYPos(points[0]));
+    for (i = 1; i < points.size(); i++) {
+        featurePointsXY.push_back(getAbsoluteXYPos(points[i]));
+        if (polygon == false) {
+            setlinewidth(6);
+            drawline(featurePointsXY[i - 1], featurePointsXY[i]);
+        }
+    }
+    //Draws that multi-sided figure
+    if (polygon == true) {
+        fillpoly(&featurePointsXY[0], points.size());
+
+    }
+    featurePointsXY.clear();
+}
+
+
+
+// Does the same as the below function but first gets the coordinates from features points and its ids
+
+//void drawPolygon(unsigned featurePoints, unsigned featureId) {
+//    unsigned i = 0;
+//    LatLon start = getFeaturePoint(featureId, i);
+//    LatLon end = getFeaturePoint(featureId, featurePoints - 1);
+//
+//    t_point featurePointsXY[featurePoints];
+//    featurePointsXY[i] = getAbsoluteXYPos(start);
+//    bool polygon = false;
+//
+//    if ((start.lat() == end.lat()) && (start.lon() == end.lon())) {
+//        polygon = true;
+//    }
+//
+//    for (i = 1; i < featurePoints; i++) {
+//        LatLon coordinates = getFeaturePoint(featureId, i);
+//        featurePointsXY[i] = getAbsoluteXYPos(coordinates);
+//
+//        if (polygon == false) {
+//            setlinewidth(10);
+//            drawline(featurePointsXY[i - 1], featurePointsXY[i]);
+//        }
+//    }
+//
+//    if (polygon == true) {
+//        fillpoly(featurePointsXY, featurePoints);
+//    }
+//}
+//
+//void drawPolygon(std::vector<LatLon> points) {
+//    bool polygon = false;
+//
+//    //Checks here if it is a polygon or a line
+//    if ((points[0].lat() == points[points.size() - 1].lat()) && (points[0].lon() == points[points.size() - 1].lon())) {
+//        polygon = true;
+//    }
+//    unsigned i = 0;
+//    t_point featurePointsXY[points.size()];
+//    featurePointsXY[i] = getAbsoluteXYPos(points[i]);
+//
+//    for (i = 1; i < points.size(); i++) {
+//        featurePointsXY[i] = getAbsoluteXYPos(points[i]);
+//
+//        if (polygon == false) {
+//            setlinewidth(5);
+//            drawline(featurePointsXY[i - 1], featurePointsXY[i]);
+//        }
+//    }
+//
+//    //Draws that multi-sided figure
+//    if (polygon == true) {
+//        fillpoly(featurePointsXY, points.size());
+//    }
+//}
+
+//void drawPointofInterest() {
+//
+//    t_bound_box currentCoords = get_visible_world();
+//    for (unsigned i = 0; i < getNumberOfPointsOfInterest(); i++) {
+//        LatLon position = getPointOfInterestPosition(i);
+//        t_point location = getAbsoluteXYPos(position);
+//        if (location.x >= currentCoords.bottom_left().x && location.y <= currentCoords.top_right().y) {
+//            setcolor(RED);
+//            drawcircle(location);
+//        }
+//        settextrotation(20);
+//        setfontsize(7);
+//        setcolor(BLACK);
+//        drawtext(location, getPointOfInterestName(i), 1000, 1000);
+//    }
+//}
+
+void drawPointofInterest(unsigned POI_id, float rad, color_types color_1, color_types color_2) {
+    LatLon position = getPointOfInterestPosition(POI_id);
+    t_point POI_position = getAbsoluteXYPos(position);
+    setcolor(color_1);
+    fillarc(POI_position, rad, 0, 360);
+    setcolor(color_2);
+    fillarc(POI_position, rad / 2, 0, 360);
+}
+
+void POItype_by_POI_id_preload(unordered_map <string, vector<unsigned>> &POItype_by_POI_ids) {
+    for (unsigned i = 0; i < getNumberOfPointsOfInterest(); i++) {
+        string POI_type = getPointOfInterestType(i);
+        auto existing_type = POItype_by_POI_ids.find(POI_type);
+        if (existing_type == POItype_by_POI_ids.end()) {
+            vector<unsigned>temp_type;
+            temp_type.push_back(i);
+            POItype_by_POI_ids.insert(make_pair(POI_type, temp_type));
+        } else {
+            existing_type->second.push_back(i);
+        }
+    }
+}
+
+vector<unsigned> get_POI_id_by_POItype(string type) {
+    vector<unsigned> POI_id;
+    if (POItype_by_POI_id.count(type) > 0) {
+        POI_id = POItype_by_POI_id.find(type)->second;
+    }
+    return POI_id;
+}
+//This function is used for drawing different types of POI in different levels
+//of scales.
+
+void drawPOIbyType(string type) {
+    vector<unsigned> POI_id = get_POI_id_by_POItype(type);
+    if (POI_id.size() > 0) {
+        if (type == "cafe" || type == "fast_food" || type == "food_court" || type == "restaurant")
+            drawSustenance(POI_id);
+        else if (type == "college" || type == "school" || type == "university")
+            drawEducation(POI_id);
+        else if (type == "bus_station" || type == "ferry_terminal")
+            drawTransportation(POI_id);
+        else if (type == "atm" || type == "bank")
+            drawFinancial(POI_id);
+        else if (type == "clinic" || type == "doctors" || type == "hospital")
+            drawHealthcare(POI_id);
+        else {
+            for (auto iter = POI_id.begin(); iter != POI_id.end(); iter++) {
+                drawPointofInterest(*iter, 0.00005, KHAKI, WHITE);
+            }
+        }
+    }
+}
+
+void drawPOIName(t_point POI_position, unsigned POI_id) {
+    string name = getPointOfInterestName(POI_id);
+    if (name != "<noname>") {
+        setcolor(BLACK);
+        setfontsize(7);
+        float offset = abs(xscrn_to_world(12) - xscrn_to_world(0));		
+        drawtext(POI_position.x, POI_position.y + offset, name, 0.001, 0.001);
+    }
+}
+
+void drawSustenance(vector<unsigned> POI_id) {
+    float width = 2 * sqrt(1 / (get_visible_world().get_width()*100)) + 2;
+    for (auto iter = POI_id.begin(); iter != POI_id.end(); iter++) {
+        LatLon position = getPointOfInterestPosition(*iter);
+        t_point POI_position = getAbsoluteXYPos(position);
+        setcolor(YELLOW);
+        fillarc(POI_position, 0.0000035, 0, 360);
+        setcolor(WHITE);
+        t_bound_box text((POI_position.x) - 0.00008, (POI_position.y) - 0.00008,
+                (POI_position.x) + 0.00008, (POI_position.y) + 0.00008);
+        settextrotation(0);
+        setfontsize(width);
+        drawtext_in(text, ":)");
+        drawPOIName(POI_position, *iter);
+    }
+}
+
+void drawEducation(vector<unsigned> POI_id) {
+    float width = 2 * sqrt(1 / (get_visible_world().get_width()*100)) + 2;
+    for (auto iter = POI_id.begin(); iter != POI_id.end(); iter++) {
+        LatLon position = getPointOfInterestPosition(*iter);
+        t_point POI_position = getAbsoluteXYPos(position);
+        setcolor(LIGHTSKYBLUE);
+        fillarc(POI_position, 0.0000035, 0, 360);
+        setcolor(WHITE);
+        t_bound_box text((POI_position.x) - 0.00008, (POI_position.y) - 0.00008,
+                (POI_position.x) + 0.00008, (POI_position.y) + 0.00008);
+        settextrotation(0);
+        setfontsize(width);
+        drawtext_in(text, "A+");
+        drawPOIName(POI_position, *iter);
+    }
+}
+
+void drawTransportation(vector<unsigned> POI_id) {
+    float width = 2 * sqrt(1 / (get_visible_world().get_width()*100)) + 2;
+    for (auto iter = POI_id.begin(); iter != POI_id.end(); iter++) {
+        LatLon position = getPointOfInterestPosition(*iter);
+        t_point POI_position = getAbsoluteXYPos(position);
+        setcolor(LIGHTMEDIUMBLUE);
+        fillarc(POI_position, 0.0000035, 0, 360);
+        setcolor(WHITE);
+        t_bound_box text((POI_position.x) - 0.00008, (POI_position.y) - 0.00008,
+                (POI_position.x) + 0.00008, (POI_position.y) + 0.00008);
+        settextrotation(0);
+        setfontsize(width);
+        drawtext_in(text, "<==");
+        draw_surface(demo, text.get_xcenter(), text.get_ycenter());
+        drawPOIName(POI_position, *iter);
+    }
+}
+
+void drawFinancial(vector<unsigned> POI_id) {
+    float width = 2 * sqrt(1 / (get_visible_world().get_width()*100)) + 2;
+    for (auto iter = POI_id.begin(); iter != POI_id.end(); iter++) {
+        LatLon position = getPointOfInterestPosition(*iter);
+        t_point POI_position = getAbsoluteXYPos(position);
+        setcolor(LIMEGREEN);
+        fillarc(POI_position, 0.0000035, 0, 360);
+        setcolor(WHITE);
+        t_bound_box text((POI_position.x) - 0.00008, (POI_position.y) - 0.00008,
+                (POI_position.x) + 0.00008, (POI_position.y) + 0.00008);
+        settextrotation(0);
+        setfontsize(width);
+        drawtext_in(text, "$");
+        //Is it necessary to always show POI's name?
+        draw_surface(bank, text.get_xcenter(), text.get_ycenter());
+        drawPOIName(POI_position, *iter);
+    }
+}
+
+void drawHealthcare(vector<unsigned> POI_id) {
+    float width = 2 * sqrt(1 / (get_visible_world().get_width()*100)) + 2;
+    for (auto iter = POI_id.begin(); iter != POI_id.end(); iter++) {
+        LatLon position = getPointOfInterestPosition(*iter);
+        t_point POI_position = getAbsoluteXYPos(position);
+        setcolor(RED);
+        fillarc(POI_position, 0.0000035, 0, 360);
+        setcolor(WHITE);
+        t_bound_box text((POI_position.x) - 0.00008, (POI_position.y) - 0.00008,
+                (POI_position.x) + 0.00008, (POI_position.y) + 0.00008);
+        settextrotation(0);
+        setfontsize(width);
+        drawtext_in(text, "+");
+        draw_surface(hospital, text.get_xcenter(), text.get_ycenter());
+        drawPOIName(POI_position, *iter);
+    }
+}
+
+//void drawClickedPOI (t_point POI_position) {		
+//    bool exsit = false;		
+//    unsigned POI_id;		
+//    for (unsigned i = 0; i < getNumberOfPointsOfInterest(); i++) {		
+//        t_point temp_position = getAbsoluteXYPos(getPointOfInterestPosition(i));		
+//        if (temp_position.x == POI_position.x && temp_position.y == POI_position.y) {		
+//            exsit = true;		
+//            POI_id = i;		
+//        }		
+//    }		
+//    		
+//    if (exsit) {		
+//        string name = getPointOfInterestName(POI_id);		
+//        string type = getPointOfInterestType(POI_id);		
+//    		
+//        cout << name + " Type: " + type << endl;		
+//    }		
+//}
+
+void act_on_POI (void((*drawscreen_ptr) (void))){		
+    update_message("Search for a point of interest: ");		
+    string name;		
+    getline(cin, name);		
+    		
+    vector<unsigned> POI_id = getPointOfInterestID(name);		
+
+    if (POI_id.size() > 0) {
+        show_highlighted_POI = true;
+        //draw_highlighted_POI();
+    } else {
+        cout << "Not Found." << endl;
+        update_message(name + " not found.");		
+    }		
+    		
+    drawscreen();
+}
+// Draws a circle I 
+
+void drawcircle(t_point location) {
+    fillellipticarc(location.x, location.y, 0.0000008, 0.0000008, 0, 360);
+}
+
+
+// Highlights the POI when searched for. 
+
+vector<unsigned> drawPoifromname(string poiname) {
+    POIIDS = getPointOfInterestID(poiname);
+    for (auto itr = POIIDS.begin(); itr != POIIDS.end(); itr++) {
+        LatLon location = getPointOfInterestPosition(*itr);
+        drawHighlightedIntersectionAndPOI(location);
+    }
+    return POIIDS;
+}
+
+void draw_highlighted_POI() {
+    if (show_highlighted_POI) {
+        string bottom_text = "";
+        setcolor(YELLOW);
+        for (auto i = POIIDS.begin(); i != POIIDS.end(); i++) {
+            t_point position = getAbsoluteXYPos(getPointOfInterestPosition(*i));
+            fillarc(position, 0.0000035, 0, 360);
+            bottom_text = bottom_text + "   " + "Point Of Interest: " + getPointOfInterestName(*i) + "   "
+                + "Type: " + getPointOfInterestType(*i);
+            cout << "Point Of Interest: " << getPointOfInterestName(*i) << "  Type: " << getPointOfInterestType(*i) << endl;
+            
+            update_message(bottom_text);
+        } 
+    } else {
+        update_message("");
+    }
+}
+
+/* Draws a circle highlighted Point of interest with different radius 
+ * for different zoom levels */ //continue..........
+
+void drawHighlightedIntersectionAndPOI(LatLon position) {
+    t_point location = getAbsoluteXYPos(position);
+
+    fillellipticarc(location.x, location.y, 0.00007, 0.00007, 0, 360);
+    flushinput();
+}
+
+/* Draws the osm buildings like airport terminals and train stations. 
+ * Draws a polygon around a vector of latlons. */
+void drawOSMBuildings() {
+    setcolor(BLUE);
+    for (auto itr = OSMBuildings.begin(); itr != OSMBuildings.end(); itr++) {
+        drawPolygon(*itr);
+    }
+}
+
+//Draws the gas ,hospitals,the different points of interest 
+// 
+//when the user clicks on the menu.
+
+void drawHospitals() {
+    for (unsigned i = 0; i < getNumberOfPointsOfInterest(); i++) {
+        if (getPointOfInterestType(i) == "clinic" || getPointOfInterestType(i) == "doctor" || getPointOfInterestType(i) == "hospital") {
+            LatLon location = getPointOfInterestPosition(i);
+            t_point position = getAbsoluteXYPos(location);
+            setcolor(DARKSLATEBLUE);
+            drawHighlightedIntersectionAndPOI(location);
+            setcolor(BLACK);
+            setfontsize(7);
+            drawtext(position, getPointOfInterestName(i), 1000, 1000);
+
+        }
+    }
+}
+
+
+//Clears all highlighted stuff
+
+void clearAllVectors() {
+
+    POIIDS.clear();
+
+}
+
+
+
+//void destroyOSMdatabase(){
+//    isOSMDoneLoading = false;
+//    
+//    OSMBuildings.clear();
+//    closeOSMDatabase();
+//   
+//}
+//
+//
+//bool loadOSMdatabase(const std::string & osmBin_map){;
+//if  (!loadOSMDatabaseBIN(osmBin_map))
+//            return false;
+//    return true;
+// }
+
+vector<unsigned> getPointOfInterestID(std::string pointOfInterestName) {
+    vector<unsigned> POI_id;
+    for (unsigned i = 0; i < getNumberOfPointsOfInterest(); i++) {
+        if (pointOfInterestName == getPointOfInterestName(i))
+            POI_id.push_back(i);
+    }
+    return POI_id;
+}

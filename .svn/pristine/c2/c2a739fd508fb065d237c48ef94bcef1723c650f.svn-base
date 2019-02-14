@@ -1,0 +1,29 @@
+/*
+ * Pre-load necessary database. (Will be organized up as a class)
+ * 
+ */
+
+/* 
+ * File:   preload.h
+ * Author: caojianr
+ *
+ * Created on January 30, 2017, 6:31 PM
+ */
+
+#include <vector>
+#include "m1.h"
+#include "StreetsDatabaseAPI.h"
+
+using namespace std;
+
+#ifndef PRELOAD_H
+#define PRELOAD_H
+
+vector <vector<unsigned>> street_street_segments_preload();
+vector <double> street_segment_length_preload();
+vector <double> street_length_preload();
+vector <double> speed_limit_preload();
+vector <unsigned> curve_point_count_preload();
+vector <StreetIndex> street_id_preload();
+
+#endif /* PRELOAD_H */

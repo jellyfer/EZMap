@@ -1,0 +1,307 @@
+#include <vector>
+#include <unordered_map>
+#include <math.h>
+#include <string>
+#include <algorithm>
+
+#include "m1.h"
+#include "StreetsDatabaseAPI.h"
+#include "preload.h"
+
+
+using namespace std;
+
+
+
+
+//Organized database.
+vector <double> street_segment_length;
+vector <double> street_length;
+vector <vector<unsigned>> street_street_segments;
+vector <double> speed_limit;
+unordered_map<string, vector<unsigned>> find_street_ids_from_name_map;
+
+bool load_map(string map_name) {
+
+    bool success = loadStreetsDatabaseBIN(map_name);
+    
+    //Pre-load necessary database. (Will be organized up as a class) 
+    street_street_segments = street_street_segments_preload();
+    street_segment_length = street_segment_length_preload();
+    street_length = street_length_preload();
+    speed_limit = speed_limit_preload();
+    find_street_ids_from_name_map = street_ids_preload();
+    return true;
+}
+
+void close_map() {
+    //Clean-up your map related data structures here
+    //free any other data structures if we decide to use them
+    find_street_ids_from_name_map.clear();
+    closeStreetDatabase();
+}
+
+//Returns street id(s) for the given street name
+//If no street with this name exists, returns a 0-length vector.
+
+vector<unsigned> find_street_ids_from_name(string street_name)
+ {
+    if (find_street_ids_from_name_map.find (street_name) == find_street_ids_from_name_map.end()){
+        vector <unsigned> empty;
+        return empty;
+    }
+    return find_street_ids_from_name_map[street_name];
+}
+
+//Returns the street segments for the given intersection fip
+
+vector<unsigned> find_intersection_street_segments(unsigned intersection_id) {
+    vector<unsigned> intersection_street_segments;
+    unsigned StreetSegmentCount, i;
+
+    StreetSegmentCount = getIntersectionStreetSegmentCount(intersection_id);
+
+    for (i = 0; i < StreetSegmentCount; i++) {
+        StreetSegmentIndex streetSegmentldx;
+        streetSegmentldx = getIntersectionStreetSegment(intersection_id, i);
+        intersection_street_segments.push_back(streetSegmentldx);
+    }
+
+    return intersection_street_segments;
+}
+
+//Returns the street names at the given intersection (includes duplicate street names in returned vector)
+
+vector<string> find_intersection_street_names(unsigned intersection_id) {
+    vector<string> intersection_street_names;
+    unsigned StreetSegmentCount, i;
+
+    StreetSegmentCount = getIntersectionStreetSegmentCount(intersection_id);
+
+    //loop through all the number of street segments and fetch street names for each of them
+    for (i = 0; i < StreetSegmentCount; i++) {
+        StreetSegmentIndex streetSegmentldx;
+        streetSegmentldx = getIntersectionStreetSegment(intersection_id, i);
+        StreetIndex streetldx = getStreetSegmentInfo(streetSegmentldx).streetID;
+        string street_names = getStreetName(streetldx);
+        intersection_street_names.push_back(street_names);
+
+    }
+
+    return intersection_street_names;
+}
+
+//Returns true if you can get from intersection1 to intersection2 using a single street segment (hint: check for 1-way streets too)
+//corner case: an intersection is considered to be connected to itself
+
+bool are_directly_connected(unsigned intersection_id1, unsigned intersection_id2) {
+    unsigned StreetSegmentCount, i;
+    //check when an intersection is connected to itself
+    if (intersection_id1 == intersection_id2) return true;
+    else StreetSegmentCount = getIntersectionStreetSegmentCount(intersection_id1);
+
+    //loop through all the street segments for the given intersections 
+    //check if the given two intersections are connected
+    for (i = 0; i < StreetSegmentCount; i++) {
+        StreetSegmentIndex streetSegmentldx;
+        streetSegmentldx = getIntersectionStreetSegment(intersection_id1, i);
+        if ((intersection_id2 == getStreetSegmentInfo(streetSegmentldx).from) || (intersection_id2 == getStreetSegmentInfo(streetSegmentldx).to)) return true;
+    }
+    return false;
+}
+
+//Returns all intersections reachable by traveling down one street segment 
+//from given intersection (hint: you can't travel the wrong way on a 1-way street)
+//the returned vector should NOT contain duplicate intersections
+
+vector<unsigned> find_adjacent_intersections(unsigned intersection_id) {
+    vector<unsigned> adjacent_intersections;
+    unsigned StreetSegmentCount, i;
+
+    StreetSegmentCount = getIntersectionStreetSegmentCount(intersection_id);
+    //loop through all the street segments for each intersection 
+    for (i = 0; i < StreetSegmentCount; i++) {
+        StreetSegmentIndex streetSegmentldx;
+        streetSegmentldx = getIntersectionStreetSegment(intersection_id, i);
+        IntersectionIndex intersection_idx;
+
+        StreetSegmentInfo StreetSegmentInfo;
+        StreetSegmentInfo = getStreetSegmentInfo(streetSegmentldx);
+
+        //check for a one way street
+        if (StreetSegmentInfo.oneWay) {
+            if (intersection_id == StreetSegmentInfo.from)
+                intersection_idx = StreetSegmentInfo.to;
+            else continue;
+            
+        } else{
+            if(intersection_id ==StreetSegmentInfo.from)
+                intersection_idx=StreetSegmentInfo.to;
+            else
+                intersection_idx=StreetSegmentInfo.from;
+        }       
+        //check for duplicate intersections
+        bool repeatDate=false;
+        for(unsigned j=0;j<adjacent_intersections.size();j++)
+            if (adjacent_intersections[j]==intersection_idx){repeatDate=true; break;}
+        if(!repeatDate)
+        adjacent_intersections.push_back(intersection_idx);
+    
+    }
+
+    return adjacent_intersections;
+}
+
+//Returns all street segments for the given street
+vector<unsigned> find_street_street_segments(unsigned street_id){
+    return street_street_segments[street_id];
+}
+
+//Returns all intersections along the a given street
+
+vector<unsigned> find_all_street_intersections(unsigned street_id) {
+    vector<unsigned> intersections;
+    //goes through all street segments
+    for (unsigned int x = 0; x < getNumberOfStreetSegments(); x++) {
+        //if street is found, looks for the intersection at both ends of street segment
+        //only adds the intersection if it isn't in the vector already
+        if (street_id == getStreetSegmentInfo(x).streetID) {
+            if (find(intersections.begin(), intersections.end(), getStreetSegmentInfo(x).from) == intersections.end())
+                intersections.push_back(getStreetSegmentInfo(x).from);
+            if (find(intersections.begin(), intersections.end(), getStreetSegmentInfo(x).to) == intersections.end())
+                intersections.push_back(getStreetSegmentInfo(x).to);
+        }
+    }
+    return intersections;
+}
+
+//Return all intersection ids for two intersecting streets
+//This function will typically return one intersection id.
+//However street names are not guarenteed to be unique, so more than 1 intersection id may exist
+//needs fix
+vector<unsigned> find_intersection_ids_from_street_names(string street_name1, string street_name2) {
+    vector<unsigned> intersectionID;
+    //the ids of each street name is stored
+    vector<unsigned> street_name1_id = find_street_ids_from_name (street_name1);
+
+    vector<unsigned> street_name2_id = find_street_ids_from_name (street_name2);
+    
+    //to contain all intersections of the first and second street
+    vector<unsigned> street1_intersections;
+    vector<unsigned> street2_intersections;
+    
+    vector<unsigned> temporary_intersections;
+    //stores all the intersections of first street
+   
+    for (unsigned int x = 0; x<street_name1_id.size();x++){
+        temporary_intersections = find_all_street_intersections(street_name1_id[x]);
+        street1_intersections.insert (street1_intersections.end(), temporary_intersections.begin(), temporary_intersections.end());
+    }
+ 
+    //stores all the intersections of the second street
+    for (unsigned int x = 0; x<street_name2_id.size();x++){
+        temporary_intersections = find_all_street_intersections(street_name2_id[x]);
+        street2_intersections.insert (street2_intersections.end(), temporary_intersections.begin(), temporary_intersections.end());
+
+    }
+ 
+    //checks if there are common intersections for both street names
+    for (unsigned int x = 0; x< street1_intersections.size();x++)
+         if (find (street2_intersections.begin(),street2_intersections.end(),street1_intersections[x]) != street2_intersections.end())             
+             intersectionID.push_back(street1_intersections[x]);
+
+    return intersectionID;
+}
+
+//Returns the distance between two coordinates in meters
+
+double find_distance_between_two_points(LatLon point1, LatLon point2) {
+    //Calculate the average latitude with given points.
+    double lat_avg = DEG_TO_RAD * (point1.lat() + point2.lat()) / 2.0;
+
+    //Convert into x,y coordinates.
+    double x1 = DEG_TO_RAD * point1.lon() * cos(lat_avg);
+    double x2 = DEG_TO_RAD * point2.lon() * cos(lat_avg);
+
+    double y1 = DEG_TO_RAD * point1.lat();
+    double y2 = DEG_TO_RAD * point2.lat();
+
+    //Calculate the distance between two points with given function.
+    double distance = EARTH_RADIUS_IN_METERS * sqrt((y2 - y1) * (y2 - y1) + (x2 - x1) * (x2 - x1));
+
+    return distance;
+}
+
+//Returns the length of the given street segment in meters
+
+double find_street_segment_length(unsigned street_segment_id) {
+    return street_segment_length[street_segment_id];
+}
+
+//Returns the length of the specified street in meters
+
+double find_street_length(unsigned street_id) {
+    return street_length[street_id];
+}
+
+//Returns the travel time to drive a street segment in seconds (time = distance/speedLimit)
+
+double find_street_segment_travel_time(unsigned street_segment_id) {
+    double time;
+    double distance = find_street_segment_length(street_segment_id);
+    double speedLimit = speed_limit[street_segment_id];
+    
+    //Calculate time with distance, speedLimit, and conversion factor(3.6). 
+    time = distance / speedLimit * 3.6;
+    return time;
+}
+
+//Returns the nearest point of interest to the given position
+
+unsigned find_closest_point_of_interest(LatLon my_position) {
+    unsigned int closest_interest_pt = 0;
+    LatLon temp_position;
+    double min_distance, temp_distance;
+
+    //Calculate the distance between my_position with 0th point of interest, otherwise
+    //it will always waste time to check the corner case in the for loop.
+    temp_position = getPointOfInterestPosition(closest_interest_pt);
+    min_distance = find_distance_between_two_points(my_position, temp_position);
+
+    //Loop through all points of interests from the 1st one and replace closest_interest_pt when possible.
+    for (unsigned int i = 1; i < getNumberOfPointsOfInterest(); i++) {
+        temp_position = getPointOfInterestPosition(i);
+        temp_distance = find_distance_between_two_points(my_position, temp_position);
+
+        if (temp_distance < min_distance) {
+            min_distance = temp_distance;
+            closest_interest_pt = i;
+        }
+    }
+    return closest_interest_pt;
+}
+
+//Returns the the nearest intersection to the given position
+
+unsigned find_closest_intersection(LatLon my_position) {
+    unsigned int closest_interest_pt = 0;
+    LatLon temp_position;
+    double min_distance, temp_distance;
+
+    //Calculate the distance between my_position with 0th intersection position, otherwise
+    //it will always waste time to check the corner case in the for loop.
+    temp_position = getIntersectionPosition(closest_interest_pt);
+    min_distance = find_distance_between_two_points(my_position, temp_position);
+
+    //Loop through all points of interests from the 1st one and replace closest_interest_pt when possible.
+    for (unsigned int i = 1; i < getNumberOfIntersections(); i++) {
+        temp_position = getIntersectionPosition(i);
+        temp_distance = find_distance_between_two_points(my_position, temp_position);
+
+        if (temp_distance < min_distance) {
+            min_distance = temp_distance;
+            closest_interest_pt = i;
+        }
+    }
+    return closest_interest_pt;
+}

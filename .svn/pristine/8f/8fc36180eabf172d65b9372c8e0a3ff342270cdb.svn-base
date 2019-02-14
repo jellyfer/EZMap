@@ -1,0 +1,454 @@
+#include "m1.h"
+#include "m1_additional.h"
+#include "m2_M.h"
+#include "m3.h"
+#include "m3_additional.h"
+#include "StreetsDatabaseAPI.h"
+#include <algorithm>
+#include <queue>
+#include <functional>
+#include <unordered_map>
+#include <unordered_set>
+#include <queue>
+#include <graphics.h>
+using namespace std;
+
+// Returns the time required to travel along the path specified, in seconds. 
+// The path is given as a vector of street segment ids, and this function 
+// can assume the vector either forms a legal path or has size == 0.
+// The travel time is the sum of the length/speed-limit of each street 
+// segment, plus the given turn_penalty (in seconds) per turn implied by the path. 
+// A turn occurs when two consecutive street segments have different street IDs.
+
+double compute_path_travel_time(const std::vector<unsigned>& path,
+        const double turn_penalty) {
+    double time = 0;
+    // If there's an empty ippath, return 0s.
+    if (path.empty()) {
+        return time;
+        // If there's only one segment, return its travel time.
+    } else if (path.size() == 1) {
+        time = find_street_segment_travel_time(path[0]);
+        return time;
+    } else {
+        // Calculate the first segment travel time.
+        StreetSegmentInfo previousSegment = getStreetSegmentInfo(path[0]);
+        time = time + find_street_segment_travel_time(path[0]);
+        for (unsigned int size = 1; size < path.size(); size++) {
+            StreetSegmentInfo currentSegment = getStreetSegmentInfo(path[size]);
+            double travelTime = find_street_segment_travel_time(path[size]);
+            // Check if there's a turn from previous segment and current segment.
+            if (previousSegment.streetID != currentSegment.streetID) {
+                time = time + travelTime + turn_penalty;
+            } else {
+                time = time + travelTime;
+            }
+            previousSegment = currentSegment;
+        }
+    }
+
+    return time;
+}
+
+double heuristic(unsigned current, unsigned dest) {
+    double dist = find_distance_between_two_points(getIntersectionPosition(current), getIntersectionPosition(dest));
+
+    return dist / fastest_speed()* 3.6;
+
+}
+
+vector<unsigned> finish_clean(node* &last, std::unordered_map<unsigned, node*> &get_node) {
+    list <unsigned> street_segment_path_list;
+
+    while (last->street_seg_id != -1) {
+
+        street_segment_path_list.push_front(last -> street_seg_id);
+
+        last = last->parent_node;
+
+    }
+
+    vector <unsigned> street_segment_path_vector{std::begin(street_segment_path_list), std::end(street_segment_path_list)};
+
+    for (auto it = get_node.begin(); it != get_node.end(); it++)
+        delete (it->second);
+    get_node.clear();
+    return street_segment_path_vector;
+}
+
+
+// Returns a path (route) between the start intersection and the end 
+// intersection, if one exists. This routine should return the shortest path
+// between the given intersections when the time penalty to turn (change
+// street IDs) is given by turn_penalty (in seconds).
+// If no path exists, this routine returns an empty (size == 0) vector. 
+// If more than one path exists, the path with the shortest travel time is 
+// returned. The path is returned as a vector of street segment ids; traversing 
+// these street segments, in the returned order, would take one from the start 
+// to the end intersection.
+
+vector<unsigned> find_path_between_intersections(const unsigned intersect_id_start,
+        const unsigned intersect_id_end,
+        const double turn_penalty) {
+
+    vector <unsigned> empty;
+    if (intersect_id_start == intersect_id_end) {
+        return empty;
+    }
+    std::set<node*, compare> open;
+    std::unordered_set<unsigned> closed;
+    std::unordered_map<unsigned, node*> get_node;
+
+    node* first = new node();
+    first -> intersection_id = intersect_id_start;
+    get_node.insert(make_pair(intersect_id_start, first));
+    open.insert(first);
+    while (open.size() != 0) {
+        node* curr = *open.begin();
+        open.erase(open.begin());
+        if (curr->intersection_id == intersect_id_end) {
+            open.clear();
+            closed.clear();
+            return finish_clean(curr, get_node);
+        }
+        closed.insert(curr->intersection_id);
+
+        vector <unsigned> adj_segments = find_intersection_street_segments(curr->intersection_id);
+        for (unsigned int x = 0; x < adj_segments.size(); x++) {
+            
+            StreetSegmentInfo ss = getStreetSegmentInfo(adj_segments[x]);
+            unsigned next_intersection = ss.to;
+
+
+            
+
+            if (ss.to == curr->intersection_id) {
+                //if it's one way & wrong direction, we should ignore this route.
+                if (ss.oneWay) {
+                    continue;
+                }
+                next_intersection = ss.from;
+            }
+            
+            //ignore if it is in closed
+            if (closed.find(next_intersection) != closed.end()) {
+                continue;
+            }
+
+            //if its not in get_node, meaning there is no node* associated with the intersection
+            //it is not closed & is not an invalid direction
+            //it has been added before so it must be open
+            if (get_node.find(next_intersection) == get_node.end()) {
+                node* next_node = new node();
+                next_node -> intersection_id = next_intersection;
+                next_node -> h = heuristic(next_intersection, intersect_id_end);
+                //turn penalty, avoids adding a penalty to the first node as it has no prev street
+                next_node -> g = curr-> g + find_street_segment_travel_time(adj_segments[x]);
+                if (curr->street_seg_id != -1 && ss.streetID != getStreetSegmentInfo(curr -> street_seg_id).streetID){
+                    next_node -> g += turn_penalty;
+                }
+                next_node -> f = next_node-> g + next_node ->h;
+                next_node -> parent_node = curr;
+                next_node -> street_seg_id = adj_segments[x];
+
+                //insert into map for indexing
+                get_node.insert(make_pair(next_intersection, next_node));
+                open.insert(next_node);
+            } else {
+
+                double new_g = curr-> g + find_street_segment_travel_time(adj_segments[x]);
+                if (curr->street_seg_id != -1 && ss.streetID != getStreetSegmentInfo(curr -> street_seg_id).streetID){
+                    new_g += turn_penalty;
+                }
+                if (new_g < get_node[next_intersection] ->g) {
+                    node* next_node = new node();
+                    next_node -> intersection_id = next_intersection;
+                    next_node -> h = get_node[next_intersection]->h;
+                    next_node -> g = new_g;
+                    next_node -> f = new_g + next_node ->h;
+                    next_node -> parent_node = curr;
+                    next_node -> street_seg_id = adj_segments[x];
+                    node* delete_node = *(open.find(get_node[next_intersection]));
+
+                    open.erase(open.find(get_node[next_intersection]));
+                    get_node[next_intersection] = next_node;
+
+                    delete delete_node;
+
+
+                    //insert into map for indexing
+                    open.insert(next_node);
+
+
+                }
+            }
+
+
+        }
+    }
+
+    for (auto it = get_node.begin(); it != get_node.end(); it++)
+        delete (it->second);
+    get_node.clear();
+    closed.clear();
+    open.clear();
+
+    return empty;
+ 
+}
+
+// Found shortest path from start intersection to POI's nearest intersection.
+// Used for printing instructions.
+vector <unsigned> shortest_path_instruction;
+
+// Returns the shortest travel time path (vector of street segments) from 
+// the start intersection to a point of interest with the specified name.
+// The path will begin at the specified intersection, and end on the 
+// intersection that is closest (in Euclidean distance) to the point of 
+// interest.
+// If no such path exists, returns an empty (size == 0) vector.
+
+std::vector<unsigned> find_path_to_point_of_interest(const unsigned intersect_id_start,
+        const std::string point_of_interest_name,
+        const double turn_penalty) {
+    // Shortest path vector with segment IDs in it.
+    vector <unsigned> path;
+    // Matched POI IDs with given name.
+    vector <unsigned> POI_id = getPointOfInterestID(point_of_interest_name);
+    
+    // If there is no POI matches given name.
+    if (POI_id.empty()) {
+        return path;
+    // If there is only one POI matches given name, find the shortest path directly.
+    } else if (POI_id.size() == 1) {
+        LatLon POI_position = getPointOfInterestPosition(POI_id[0]);
+        // Key(.first) is the intersect_id, and value(.second) is the POI_id.
+        unordered_map <unsigned, unsigned> closet_intersection;
+        closet_intersection.insert({find_closest_intersection(POI_position), POI_id[0]});
+        path = Dijkstra(intersect_id_start, closet_intersection, turn_penalty);
+        return path;
+    // If there are 20 POIs match given name, find the shortest path among them.
+    } else if (POI_id.size() <= 20) {
+        // Key(.first) is the intersect_id, and value(.second) is the POI_id.
+        unordered_map <unsigned, unsigned> closet_intersection_list;
+        for (auto iter = POI_id.begin(); iter != POI_id.end(); iter++) {
+            LatLon POI_position = getPointOfInterestPosition(*iter);
+            closet_intersection_list.insert({find_closest_intersection(POI_position), *iter});
+        }
+        path = Dijkstra(intersect_id_start, closet_intersection_list, turn_penalty);
+        return path;
+    // If there are too many(>20) POIs match given name, use priority_queue to find shortest path. 
+    } else {
+        LatLon intersection_position = getIntersectionPosition(intersect_id_start);
+        // Declare a pair for distance and POI id.
+        // First is the distance from POI to start intersection.
+        // Second is the POI_id.
+        typedef pair<double, unsigned> POI_pair;
+        // Smaller distance means higher priority.
+        priority_queue <POI_pair, vector<POI_pair>, greater<POI_pair>> POI_priority_queue;
+        
+        // Store all matched POIs into POI_priority_queue.
+        for (auto iter = POI_id.begin(); iter != POI_id.end(); iter++) {
+            LatLon POI_position = getPointOfInterestPosition(*iter);
+            double distance = find_distance_between_two_points(POI_position, intersection_position);
+            POI_pair temp_pair(distance, *iter);
+            POI_priority_queue.push(temp_pair);
+        }
+        // Key(.first) is the intersect_id, and value(.second) is the POI_id.
+        unordered_map <unsigned, unsigned> closet_intersection_list;
+        // Only take top 20 priorities into consideration. 
+        for (unsigned i = 0; i <= 20; i++) {
+            unsigned cloest_POI_id = POI_priority_queue.top().second;
+            LatLon POI_position = getPointOfInterestPosition(cloest_POI_id);
+            unsigned closet_intersection = find_closest_intersection(POI_position);
+            closet_intersection_list.insert({closet_intersection, cloest_POI_id});
+            // Remove stored POI.
+            POI_priority_queue.pop();
+        }
+        path = Dijkstra(intersect_id_start, closet_intersection_list, turn_penalty);
+        return path;
+    }
+}
+
+vector <unsigned> Dijkstra(const unsigned intersect_id_start, 
+                           unordered_map <unsigned, unsigned> closet_intersection_list, 
+                           const double turn_penalty) {
+    // Shortest path vector with segment IDs in it.
+    vector <unsigned> path;
+    
+    // Total amount of intersections.
+    unsigned intersection_amount = getNumberOfIntersections();
+    
+    // Index is intersection_id, pair.first is from segment, and pair.second is from intersection.
+    vector <pair<unsigned, unsigned>> cameFrom;
+    cameFrom.resize(intersection_amount);    
+    
+    // Travel time from start point to the intersection. Set to be infinity here.
+    vector <double> score;
+    score.resize(intersection_amount, INFINITY);
+    score[intersect_id_start] = 0;
+    
+    // Flags for each visited intersection.
+    vector <bool> closeSet;
+    closeSet.resize(intersection_amount, true);
+    
+    // First is the travel time (score).
+    // Second is the intersection_id.
+    typedef pair<double, unsigned> node_pair;
+    // All nodes waiting for comparing in a priority_queue.
+    // Less travel time means higher priority.
+    priority_queue <node_pair, vector<node_pair>, greater<node_pair>> openSet;
+    node_pair start_node(INFINITY, intersect_id_start);
+    openSet.push(start_node);
+    
+    // Corner cases check.
+//    for (auto iter = closet_intersection_list.begin(); iter != closet_intersection_list.end(); iter++) {
+//        // Corner cases check.
+//        if (intersect_id_start == iterfirst || intersect_id_start >= intersection_amount) {
+//            return path;
+//        }
+//    }
+    
+    // While there's still nodes waiting for comparing.
+    while (!openSet.empty()) {
+        // Highest priority intersection.
+        node_pair current_node = openSet.top();
+        // Remove it from waiting list.
+        openSet.pop();
+        
+        // If current intersection hasn't been visited.
+        if (closeSet[current_node.second]) {
+            unsigned current_intersection = current_node.second;
+            shortest_path_instruction.clear();
+            
+            // Check if the destination is found.
+            if (closet_intersection_list.find(current_intersection) != closet_intersection_list.end()) {
+                unsigned reconstructed_current_intersection = current_intersection;
+                
+                while (reconstructed_current_intersection != intersect_id_start) {
+                    unsigned reconstructed_segment = cameFrom[reconstructed_current_intersection].first;
+                    // Always insert reconstructed_segment before the begin of path. 
+                    auto iter = path.begin();
+                    path.insert(iter, reconstructed_segment);
+                    // Basically made a duplicate of shortest path for printing instructions. 
+                    auto iter_instruction = shortest_path_instruction.begin();
+                    shortest_path_instruction.insert(iter_instruction, reconstructed_current_intersection);
+                    // Came back to previous intersection.
+                    unsigned reconstructed_previous_intersection = cameFrom[reconstructed_current_intersection].second;
+                    reconstructed_current_intersection = reconstructed_previous_intersection;
+                }
+                
+                // Insert start intersection to shortest_path_instruction.
+                auto iter_instruction = shortest_path_instruction.begin();
+                shortest_path_instruction.insert(iter_instruction, intersect_id_start);
+                // Break out from the while loop.
+                break;
+            }
+            
+            // Current intersection != destination
+            // Mark its flag to false.
+            closeSet[current_intersection] = false;
+            
+            unsigned segment_amount = getIntersectionStreetSegmentCount(current_intersection);
+            
+            for (unsigned i = 0; i < segment_amount; i++) {
+                unsigned current_segemt = getIntersectionStreetSegment(current_intersection, i);
+                StreetSegmentInfo temp_segment = getStreetSegmentInfo(current_segemt);
+                
+                unsigned from = temp_segment.from;
+                unsigned to = temp_segment.to;
+                
+                node_pair temp_node;
+                
+                // One way segment
+                if (temp_segment.oneWay) {
+                    // Check the legality
+                    if (current_intersection == from) { 
+                        if (closeSet[to]) {
+                            double time = find_street_segment_travel_time(current_segemt);
+                            
+                            if (current_intersection != intersect_id_start) {
+                                StreetSegmentInfo current_info = getStreetSegmentInfo(cameFrom[current_intersection].first);
+                                // Check if there's a turn
+                                if (current_info.streetID != temp_segment.streetID) {
+                                    time += turn_penalty;
+                                }
+                            }
+                            
+                            time += score[current_intersection];
+                            
+                            // Better score means shorter path
+                            if (time < score[to]) {
+                                score[to] = time;
+                                cameFrom[to].first = current_segemt;
+                                cameFrom[to].second = current_intersection;
+                            }
+                            
+                            temp_node.first = score[to];
+                            temp_node.second = to;
+                            // Push to waiting list.
+                            openSet.push(temp_node);
+                        }
+                    }
+                // Not one way segment.
+                } else {
+                    if (current_intersection == from) {
+                        if (closeSet[to]) {
+                            double time = find_street_segment_travel_time(current_segemt);
+                            
+                            if (current_intersection != intersect_id_start) {
+                                StreetSegmentInfo current_info = getStreetSegmentInfo(cameFrom[current_intersection].first);
+                                // Check if there's a turn
+                                if (current_info.streetID != temp_segment.streetID) {
+                                    time += turn_penalty;
+                                }
+                            }
+                            
+                            time += score[current_intersection];
+                            
+                            // Better score means shorter path
+                            if (time < score[to]) {
+                                score[to] = time;
+                                cameFrom[to].first = current_segemt;
+                                cameFrom[to].second = current_intersection;
+                            }
+                            
+                            temp_node.first = score[to];
+                            temp_node.second = to;
+                            // Push to waiting list.
+                            openSet.push(temp_node);
+                        }
+                    // current_intersection == to
+                    } else {
+                        if (closeSet[from]) {
+                            double time = find_street_segment_travel_time(current_segemt);
+                            
+                            if (current_intersection != intersect_id_start) {
+                                StreetSegmentInfo info = getStreetSegmentInfo(cameFrom[current_intersection].first);
+                                // Check if there's a turn
+                                if (info.streetID != temp_segment.streetID) {
+                                    time += turn_penalty;
+                                }
+                            }
+                            
+                            time += score[current_intersection];
+                            
+                            // Better score means shorter path
+                            if (time < score[from]) {
+                                score[from] = time;
+                                cameFrom[from].first = current_segemt;
+                                cameFrom[from].second = current_intersection;
+                            }
+                            
+                            temp_node.first = score[from];
+                            temp_node.second = from;
+                            // Push to waiting list.
+                            openSet.push(temp_node);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return path;
+}    

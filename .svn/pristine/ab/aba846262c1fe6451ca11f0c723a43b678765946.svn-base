@@ -1,0 +1,209 @@
+#include "m3.h"
+#include "m1.h"
+#include "m1_additional.h"
+#include "StreetsDatabaseAPI.h"
+#include "m2_M.h"
+#include "m3_additional.h"
+#include <unordered_set>
+#include <unordered_map>
+#include <queue>
+#include <graphics.h>
+using namespace std;
+
+// Returns the time required to travel along the path specified, in seconds. 
+// The path is given as a vector of street segment ids, and this function 
+// can assume the vector either forms a legal path or has size == 0.
+// The travel time is the sum of the length/speed-limit of each street 
+// segment, plus the given turn_penalty (in seconds) per turn implied by the path. 
+// A turn occurs when two consecutive street segments have different street IDs.
+
+double compute_path_travel_time(const std::vector<unsigned>& path,
+        const double turn_penalty) {
+    double time = 0;
+    // If there's an empty ippath, return 0s.
+    if (path.empty()) {
+        return time;
+        // If there's only one segment, return its travel time.
+    } else if (path.size() == 1) {
+        time = find_street_segment_travel_time(path[0]);
+        return time;
+    } else {
+        // Calculate the first segment travel time.
+        StreetSegmentInfo previousSegment = getStreetSegmentInfo(path[0]);
+        time = time + find_street_segment_travel_time(path[0]);
+        for (unsigned int size = 1; size < path.size(); size++) {
+            StreetSegmentInfo currentSegment = getStreetSegmentInfo(path[size]);
+            double travelTime = find_street_segment_travel_time(path[size]);
+            // Check if there's a turn from previous segment and current segment.
+            if (previousSegment.streetID == currentSegment.streetID) {
+                time = time + travelTime;
+            } else {
+                time = time + travelTime + turn_penalty;
+            }
+            previousSegment = currentSegment;
+        }
+    }
+    return time;
+}
+
+double heuristic(unsigned current, unsigned dest) {
+    double dist = find_distance_between_two_points(getIntersectionPosition(current), getIntersectionPosition(dest));
+
+    return dist / fastest_speed()* 3.6;
+
+}
+
+vector<unsigned> finish_clean(node* &last, std::unordered_map<unsigned, node*> &get_node) {
+    list <unsigned> street_segment_path_list;
+
+    while (last->street_seg_id != -1) {
+
+        street_segment_path_list.push_front(last -> street_seg_id);
+
+        last = last->parent_node;
+
+    }
+
+    vector <unsigned> street_segment_path_vector{std::begin(street_segment_path_list), std::end(street_segment_path_list)};
+
+    for (auto it = get_node.begin(); it != get_node.end(); it++)
+        delete (it->second);
+    get_node.clear();
+    return street_segment_path_vector;
+}
+
+
+// Returns a path (route) between the start intersection and the end 
+// intersection, if one exists. This routine should return the shortest path
+// between the given intersections when the time penalty to turn (change
+// street IDs) is given by turn_penalty (in seconds).
+// If no path exists, this routine returns an empty (size == 0) vector. 
+// If more than one path exists, the path with the shortest travel time is 
+// returned. The path is returned as a vector of street segment ids; traversing 
+// these street segments, in the returned order, would take one from the start 
+// to the end intersection.
+
+vector<unsigned> find_path_between_intersections(const unsigned intersect_id_start,
+        const unsigned intersect_id_end,
+        const double turn_penalty) {
+
+    vector <unsigned> empty;
+    if (intersect_id_start == intersect_id_end) {
+        return empty;
+    }
+    std::set<node*, compare> open;
+    std::unordered_set<unsigned> closed;
+    std::unordered_map<unsigned, node*> get_node;
+
+    node* first = new node();
+    first -> intersection_id = intersect_id_start;
+    get_node.insert(make_pair(intersect_id_start, first));
+    open.insert(first);
+    while (open.size() != 0) {
+        node* curr = *open.begin();
+        open.erase(open.begin());
+        if (curr->intersection_id == intersect_id_end) {
+            open.clear();
+            closed.clear();
+            return finish_clean(curr, get_node);
+        }
+        closed.insert(curr->intersection_id);
+
+        vector <unsigned> adj_segments = find_intersection_street_segments(curr->intersection_id);
+        for (int x = 0; x < adj_segments.size(); x++) {
+            
+            StreetSegmentInfo ss = getStreetSegmentInfo(adj_segments[x]);
+            unsigned next_intersection = ss.to;
+
+
+            
+
+            if (ss.to == curr->intersection_id) {
+                //if it's one way & wrong direction, we should ignore this route.
+                if (ss.oneWay) {
+                    continue;
+                }
+                next_intersection = ss.from;
+            }
+            
+            //ignore if it is in closed
+            if (closed.find(next_intersection) != closed.end()) {
+                continue;
+            }
+
+            //if its not in get_node, meaning there is no node* associated with the intersection
+            //it is not closed & is not an invalid direction
+            //it has been added before so it must be open
+            if (get_node.find(next_intersection) == get_node.end()) {
+                node* next_node = new node();
+                next_node -> intersection_id = next_intersection;
+                next_node -> h = heuristic(next_intersection, intersect_id_end);
+                //turn penalty, avoids adding a penalty to the first node as it has no prev street
+                next_node -> g = curr-> g + find_street_segment_travel_time(adj_segments[x]);
+                if (curr->street_seg_id != -1 && ss.streetID != getStreetSegmentInfo(curr -> street_seg_id).streetID){
+                    next_node -> g += turn_penalty;
+                }
+                next_node -> f = next_node-> g + next_node ->h;
+                next_node -> parent_node = curr;
+                next_node -> street_seg_id = adj_segments[x];
+
+                //insert into map for indexing
+                get_node.insert(make_pair(next_intersection, next_node));
+                open.insert(next_node);
+            } else {
+
+                double new_g = curr-> g + find_street_segment_travel_time(adj_segments[x]);
+                if (curr->street_seg_id != -1 && ss.streetID != getStreetSegmentInfo(curr -> street_seg_id).streetID){
+                    new_g += turn_penalty;
+                }
+                if (new_g < get_node[next_intersection] ->g) {
+                    node* next_node = new node();
+                    next_node -> intersection_id = next_intersection;
+                    next_node -> h = get_node[next_intersection]->h;
+                    next_node -> g = new_g;
+                    next_node -> f = new_g + next_node ->h;
+                    next_node -> parent_node = curr;
+                    next_node -> street_seg_id = adj_segments[x];
+                    node* delete_node = *(open.find(get_node[next_intersection]));
+
+                    open.erase(open.find(get_node[next_intersection]));
+                    get_node[next_intersection] = next_node;
+
+                    delete delete_node;
+
+
+                    //insert into map for indexing
+                    open.insert(next_node);
+
+
+                }
+            }
+
+
+        }
+    }
+
+    for (auto it = get_node.begin(); it != get_node.end(); it++)
+        delete (it->second);
+    get_node.clear();
+    closed.clear();
+    open.clear();
+
+    return empty;
+ 
+}
+
+
+// Returns the shortest travel time path (vector of street segments) from 
+// the start intersection to a point of interest with the specified name.
+// The path will begin at the specified intersection, and end on the 
+// intersection that is closest (in Euclidean distance) to the point of 
+// interest.
+// If no such path exists, returns an empty (size == 0) vector.
+
+std::vector<unsigned> find_path_to_point_of_interest(const unsigned intersect_id_start,
+        const std::string point_of_interest_name,
+        const double turn_penalty) {
+    vector <unsigned> empty;
+    return empty;
+}

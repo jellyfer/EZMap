@@ -1,0 +1,112 @@
+/*
+ * To change this license header, choose License Headers in Project Properties.
+ * To change this template file, choose Tools | Templates
+ * and open the template in the editor.
+ */
+
+/* 
+ * File:   m2_M.h
+ * Author: zhengfa7
+ *
+ * Created on February 16 */
+
+#ifndef M2_M_H
+#define M2_M_H
+#pragma once
+#include "m1.h"
+#include <boost/algorithm/string.hpp> 
+#include <string>
+#include <thread>
+#include <chrono>
+#include <cfloat>
+#include <iostream>
+#include <vector>
+#include "LatLon.h"
+#include "math.h"
+#include "StreetsDatabaseAPI.h"
+#include "graphics.h"
+#include "OSMDatabaseAPI.h"
+
+#define INIT_ZOOM 10000
+#define TEXTBOX_WIDTH 30
+#define TEXTBOX_LENGTH 400
+
+using namespace std;
+
+LatLon getAvgLatLon ();
+LatLon getLatLon (t_point XYPos);
+
+void drawStreetSegments();
+void drawStreetNames();
+//For arrow sign of one-way segments
+double setRotation(t_point &from, t_point &to);
+void draw_arrow(t_point &from, t_point &to);
+
+void drawMinorStreetSegments();
+void drawRegularStreetSegments();
+void drawMajorStreetSegments();
+void drawFreeWayStreetSegments();
+
+t_point visibleWorldToVisibleScreen (t_point visible_world);
+
+
+void drawMinorNames(); 
+void drawRegularNames();
+void drawMajorNames();
+void drawFreeWayNames();
+void drawingStreetNames(StreetSegmentInfo currStreetSegment, double width, string type);
+void drawingStreetSegments(unsigned int x);
+
+bool checkCleanNames(double x, double y, double width, string type);
+
+void draw_highlighted_intersections();
+void search_found();
+void search_intersection();
+void drawSearchBox();
+void drawTextBox (float x_topleft, float y_topleft);
+
+void drawWaterBodies ();
+void drawRiver();
+void drawIslands();
+void drawGreenery();
+void drawHospitals();     
+void drawPolygon(unsigned featurePoints, unsigned featureId);
+void drawPolygon(std::vector<LatLon> points);
+
+
+void drawBuildingsAndUnknown();
+void drawOSMBuildings();
+void clearAllVectors();
+
+void destroyOSMdatabase();
+void drawcircle(t_point location);
+void drawHighlightedIntersectionAndPOI(LatLon position);
+t_point getAbsoluteXYPos(LatLon position);
+double getAbsoluteXYLength (t_point p1, t_point p2);
+bool loadOSMdatabase(const std::string & osmBin_map);
+//void drawPointofInterest();
+void drawPointofInterest(unsigned POI_id, float rad, color_types color_1, color_types color_2);
+vector<unsigned> get_POI_id_by_POItype(string type);
+void drawPOIbyType(string type);
+void POItype_by_POI_id_preload (unordered_map <string, vector<unsigned>> &POItype_by_POI_ids);
+void drawPOIName (t_point POI_position, unsigned POI_id);
+void drawSustenance (vector<unsigned> POI_id);
+void drawEducation (vector<unsigned> POI_id);
+void drawTransportation (vector<unsigned> POI_id);
+void drawFinancial (vector<unsigned> POI_id);
+void drawHealthcare (vector<unsigned> POI_id);
+vector<unsigned> getPointOfInterestID(std::string pointOfInterestName);
+void act_on_POI (void((*drawscreen_ptr) (void)));
+//void act_on_POI (float x, float y, t_event_buttonPressed event);
+void search_POI_found();
+void draw_highlighted_POI();
+
+// Draws the map. You can assume your load_map (string map_name)
+// function is called before this function in the unit tests.
+// Your main () program should do the same.
+void draw_map();
+
+
+
+#endif /* M2_M_H */
+

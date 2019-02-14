@@ -1,0 +1,63 @@
+/*
+ * To change this license header, choose License Headers in Project Properties.
+ * To change this template file, choose Tools | Templates
+ * and open the template in the editor.
+ */
+
+/* 
+ * File:   m2_M.h
+ * Author: zhengfa7
+ *
+ * Created on February 16 */
+
+#ifndef M2_M_H
+#define M2_M_H
+#pragma once
+#include "m1.h"
+#include <boost/algorithm/string.hpp> 
+#include <string>
+#include <thread>
+#include <chrono>
+#include <cfloat>
+#include <iostream>
+#include <vector>
+#include "LatLon.h"
+#include "math.h"
+#include "StreetsDatabaseAPI.h"
+#include "graphics.h"
+#include "OSMDatabaseAPI.h"
+
+#define INIT_ZOOM 10000
+
+LatLon getAvgLatLon ();
+void drawWaterBodies ();
+void drawIslands();
+void drawGreenery();
+void drawHospitals();     
+void drawPolygon(unsigned featurePoints, unsigned featureId);
+void drawPolygon(std::vector<LatLon> points);
+
+void drawBuildingsAndUnknown();
+void drawOSMBuildings();
+void clearAllVectors();
+
+void destroyOSMdatabase();
+void drawcircle(t_point location);
+void drawHighlightedIntersectionAndPOI(LatLon position);
+t_point getAbsoluteXYPos(LatLon position);
+bool loadOSMdatabase(const std::string & osmBin_map);
+void drawPointofInterest();
+
+
+std::vector<unsigned> getPointOfInterestID(std::string pointOfInterestName);
+using namespace std;
+
+// Draws the map. You can assume your load_map (string map_name)
+// function is called before this function in the unit tests.
+// Your main () program should do the same.
+void draw_map();
+
+
+
+#endif /* M2_M_H */
+
